@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>&lt;?&gt;</title>
+  <meta name="description" content="">
+  <meta name="theme-color" content="#000000">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='black'/><text x='8' y='12.5' font-size='12' text-anchor='middle' fill='%2325ff00' font-family='monospace'>?</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Code+Pro&family=Ropa+Sans&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <div id="boot" class="boot">
+    <div class="boot-bar"><div class="boot-fill"></div></div>
+    <div class="boot-label">&lt;?&gt;</div>
+  </div>
+
+  <main id="terminal" class="terminal" aria-live="polite">
+    <div id="log"></div>
+    <form id="prompt" class="prompt hidden" autocomplete="off">
+      <span class="caret">&gt;</span>
+      <span id="echo" class="echo"></span><span class="cursor"></span>
+      <input id="input" class="input" type="text" spellcheck="false" autocapitalize="off" aria-label="answer">
+    </form>
+  </main>
+
+  <footer class="footer">
+    <span>NOTHING IS WHAT IT SEEMS</span><span>&middot;</span><span id="loops">LOOP 0</span>
+  </footer>
+
+  <script src="riddles.js"></script>
+  <script type="module" src="rat.js"></script>
+</body>
+</html>

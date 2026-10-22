@@ -1,0 +1,57 @@
+# &lt;?&gt;
+
+A riddle terminal in the style of the old *rataalada.com* Riddler site: black screen,
+green monospace text, boot bar, blinking cursor, film grain. A small, deliberately dim
+LLM lives inside it and takes you for a loop while you try to solve a chain of very
+hard riddles. The last riddle sends you back to the first.
+
+## How the "dumb LLM" works
+
+GitHub Pages only serves static files, so there is no server and no API key to hide.
+Instead the model runs **inside the visitor's browser**:
+
+- Type `WAKE` in the terminal. [WebLLM](https://github.com/mlc-ai/web-llm) downloads
+  `Qwen2.5-0.5B-Instruct` (~300 MB, once; the browser caches it) and runs it on the GPU
+  via WebGPU. It picks the f32 build on GPUs that lack 16-bit float shaders.
+- The model is told the current riddle but **not the answer**, and is instructed to mock,
+  deflect and talk in circles. At 0.5B parameters it is confidently unhelpful, which is
+  the point.
+- Answers are checked in plain JavaScript against salted SHA-256 hashes
+  (`riddles.js`), so the model can never leak or misjudge them, and view-source does
+  not spoil them.
+- No WebGPU (older browsers, some phones) or the user never types `WAKE`: a scripted
+  taunt engine answers instead, so the site always works.
+
+Commands: `hint` (only after 3 wrong answers, and the hints are riddles too),
+`again`, `clear`, `help`, `wake`. Progress and the loop counter are kept in
+`localStorage`.
+
+### Want a smarter (or dumber) rat?
+
+- Change `MODEL_F16` / `MODEL_F32` in `rat.js` to any WebLLM prebuilt model, e.g.
+  `SmolLM2-135M-Instruct-q0f16-MLC` for an even dimmer rat.
+- For a hosted model (works on every device, no download), put a tiny proxy such as a
+  Cloudflare Worker in front of an LLM API, keep the key as a Worker secret, and swap
+  `ratReply()` to `fetch()` it. Never put an API key in this repo: Pages is public.
+
+## Deploying to GitHub Pages
+
+Settings → Pages → Build and deployment → Source: **Deploy from a branch**, pick the
+branch and `/ (root)`. The site goes live at `https://<user>.github.io/<repo>/`.
+
+## Adding riddles
+
+Add an entry to `window.RIDDLES` in `riddles.js`. Compute the hash of each accepted
+answer (lowercase, punctuation stripped):
+
+```sh
+node -e 'console.log(require("crypto").createHash("sha256").update("rat:" + process.argv[1]).digest("hex").slice(0,16))' youranswer
+```
+
+## Run locally
+
+```sh
+python3 -m http.server 8000   # then open http://localhost:8000
+```
+
+(WebGPU needs `localhost` or HTTPS.)
