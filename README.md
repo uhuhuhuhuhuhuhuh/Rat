@@ -15,7 +15,7 @@ hard riddles. The last riddle sends you back to the first.
    - **rat censuses**: Chinese-remainder puzzles, up to four moduli
    - **wall scratchings**: sequences with hidden rules (sums of consecutive primes,
      digit sums of powers of two, letters in spelled-out numbers, bits in primes...),
-     and from loop 3 two rules braided together
+     and later two rules braided together
    - **bones**: letters written as numbers in a base equal to the word's own length,
      later with the alphabet reversed
    - **scrambles**: anagrams with a cryptic definition, later mirrored first
