@@ -53,6 +53,10 @@ window.RIDDLES = [
     hashes: ["7bc8d5ccd4922c60"],
     hint: "Read me the way a poet hides a name: by my edges.",
   },
+  // The rat invents these three itself (forge.js). They get harder every loop.
+  { forge: true },
+  { forge: true },
+  { forge: true },
   {
     text:
       "You have walked very far.\n" +

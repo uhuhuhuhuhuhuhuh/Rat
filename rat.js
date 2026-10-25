@@ -35,6 +35,7 @@ const state = {
   engine: null,
   waking: false,
   history: [],
+  forged: store.get("forged", null), // the riddle the rat invented for a forge slot
 };
 
 // ---------- output ----------
@@ -184,17 +185,64 @@ async function wake() {
 }
 
 // ---------- flow ----------
+const current = () => (RIDDLES[state.level].forge ? state.forged : RIDDLES[state.level]);
+
+const FORGE_INTROS = [
+  "i'm bored of the old ones. i'll make you a new one.",
+  "wait. let me think of something worse.",
+  "nobody has ever seen this one. i only just thought of it.",
+  "this one is fresh. it still twitches.",
+];
+
+async function forgeIntro() {
+  if (!state.engine) return FORGE_INTROS[Math.floor(Math.random() * FORGE_INTROS.length)];
+  try {
+    const res = await state.engine.chat.completions.create({
+      messages: [
+        { role: "system", content: "You are the Rat, a smug, creepy riddler in an old green terminal. All lowercase. One short sentence only." },
+        { role: "user", content: "Announce, ominously, that you are inventing a brand new riddle that is much harder than the last one. Do not write the riddle." },
+      ],
+      temperature: 1.1,
+      max_tokens: 40,
+    });
+    const out = (res.choices[0]?.message?.content || "").trim().toLowerCase().split(/(?<=[.?!])\s+/)[0];
+    if (out) return out;
+  } catch (err) { console.error(err); }
+  return FORGE_INTROS[0];
+}
+
+// Invent a riddle for the current forge slot. Only hashes of the answers are kept.
+async function forgeNew() {
+  const slot = RIDDLES.slice(0, state.level).filter((r) => r.forge).length;
+  const r = FORGE.make(state.loops + slot, store.get("lastKind", null));
+  const hashes = await Promise.all(r.answers.map((a) => hash(normalize(a))));
+  state.forged = { text: r.text, hint: r.hint, hashes };
+  store.set("forged", state.forged);
+  store.set("lastKind", r.kind);
+}
+
 async function askCurrent(prefix) {
-  const r = RIDDLES[state.level];
   if (prefix) await say(prefix);
-  await say(r.text, "riddle", 18);
+  if (RIDDLES[state.level].forge && !state.forged) {
+    const intro = forgeIntro();
+    const thinking = line("...", "sys");
+    await forgeNew();
+    const said = await intro;
+    thinking.remove();
+    await say(said);
+  }
+  await say(current().text, "riddle", 18);
 }
 
 async function solve() {
-  const r = RIDDLES[state.level];
+  const r = current();
   glitch();
   state.misses = 0;
   state.history = [];
+  if (RIDDLES[state.level].forge) {
+    state.forged = null;
+    store.set("forged", null);
+  }
   if (r.final) {
     state.level = 0;
     state.loops += 1;
@@ -221,7 +269,7 @@ async function handle(raw) {
   const text = raw.trim();
   if (!text) return;
   line(text, "you");
-  const r = RIDDLES[state.level];
+  const r = current();
   const cmd = text.toLowerCase();
 
   if (cmd === "wake") return wake();
