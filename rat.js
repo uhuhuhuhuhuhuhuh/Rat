@@ -36,6 +36,8 @@ const state = {
   waking: false,
   history: [],
   forged: store.get("forged", null), // the riddle the rat invented for a forge slot
+  offenses: store.get("offenses", 0), // tab switches / pastes on the current question
+  lockouts: store.get("lockouts", 0),
 };
 
 // ---------- output ----------
@@ -239,6 +241,8 @@ async function solve() {
   glitch();
   state.misses = 0;
   state.history = [];
+  state.offenses = 0;
+  store.set("offenses", 0);
   if (RIDDLES[state.level].forge) {
     state.forged = null;
     store.set("forged", null);
@@ -292,28 +296,240 @@ async function handle(raw) {
   await say(reply);
 }
 
+// ---------- turns: one thing at a time on screen ----------
+const queue = [];
+
+// Run fn with the prompt hidden. If something is already running, wait for it.
+function exclusive(fn) {
+  return new Promise((resolve) => {
+    queue.push({ fn, resolve });
+    if (!state.busy) drain();
+  });
+}
+
+async function drain() {
+  while (queue.length) {
+    const { fn, resolve } = queue.shift();
+    state.busy = true;
+    form.classList.add("hidden");
+    try { await fn(); } catch (err) { console.error(err); }
+    resolve();
+  }
+  state.busy = false;
+  if (!lock.active) {
+    form.classList.remove("hidden");
+    scrollDown();
+    focusInput();
+  }
+}
+
+// ---------- the rat is watching ----------
+// Leaving the tab or window (or pasting) counts as an offense on the current question.
+// 1: it notices. 2: it gets angry. 3+: it locks you out.
+const AWAY_TITLES = ["come back.", "i can see you.", "<!>", "the answer isn't there.", "<?>"];
+const TITLE = document.title;
+let awaySince = null;
+let titleTimer = null;
+
+function leave() {
+  if (awaySince !== null || state.waking) return; // model download is a fair reason to wander
+  awaySince = Date.now();
+  let i = 0;
+  const flip = () => { document.title = AWAY_TITLES[i++ % AWAY_TITLES.length]; };
+  clearInterval(titleTimer);
+  flip();
+  titleTimer = setInterval(flip, 1500);
+}
+
+function back() {
+  if (awaySince === null) return;
+  const secs = (Date.now() - awaySince) / 1000;
+  awaySince = null;
+  clearInterval(titleTimer);
+  document.title = TITLE;
+  if (lock.active) return lock.resume(secs);
+  if (secs < 1 || !booted) return;
+  offend("away", secs);
+}
+
+document.addEventListener("visibilitychange", () => (document.hidden ? leave() : back()));
+window.addEventListener("blur", leave);
+window.addEventListener("focus", back);
+input.addEventListener("paste", (e) => { e.preventDefault(); offend("paste"); });
+document.addEventListener("contextmenu", (e) => { e.preventDefault(); if (booted) offend("inspect"); });
+
+const NOTICED = {
+  away: (t) => [`you left. ${t} seconds. who did you ask?`, `${t} seconds. the answer isn't out there. it's in here.`, `i noticed. i always notice.`],
+  paste: () => ["you pasted that. the rat does not accept gifts.", "copied answers taste like paper."],
+  inspect: () => ["looking for my insides? i don't have any.", "right-clicking won't open me."],
+};
+const ANGRY = [
+  "AGAIN? i asked you a question and you ran off to cheat.",
+  "do that once more. i dare you.",
+  "you think i can't see the other tabs? i can see ALL of them.",
+];
+
+function scramble(text) {
+  return [...text].map((c) => (/[a-z]/i.test(c) && Math.random() < 0.35 ? "#$%&@?!"[Math.floor(Math.random() * 7)] : c)).join("");
+}
+
+async function angryLine(what, secs) {
+  if (!state.engine) return null;
+  const did = what === "away" ? `left the page for ${Math.round(secs)} seconds, probably to search for the answer` : what === "paste" ? "pasted an answer from somewhere else" : "tried to inspect the page";
+  try {
+    const res = await state.engine.chat.completions.create({
+      messages: [
+        { role: "system", content: "You are the Rat, a creepy riddler in an old terminal. You are furious. One short sentence, all lowercase. Never helpful." },
+        { role: "user", content: `The visitor just ${did} instead of solving your riddle. Scold them.` },
+      ],
+      temperature: 1.1,
+      max_tokens: 40,
+    });
+    return (res.choices[0]?.message?.content || "").trim().toLowerCase().split(/(?<=[.?!])\s+/)[0] || null;
+  } catch { return null; }
+}
+
+function offend(what, secs = 0) {
+  if (lock.active || lock.pending) return;
+  state.offenses += 1;
+  store.set("offenses", state.offenses);
+  const n = state.offenses;
+  const t = Math.round(secs);
+  if (n >= 3) lock.pending = true;
+  exclusive(async () => {
+    if (n === 1) {
+      const lines = NOTICED[what](t);
+      await say(lines[Math.floor(Math.random() * lines.length)]);
+    } else if (n === 2) {
+      glitch();
+      document.body.classList.add("angry");
+      const llm = await angryLine(what, secs);
+      await say((llm || ANGRY[Math.floor(Math.random() * ANGRY.length)]).toUpperCase(), "bad", 30);
+      const p = line(scramble(current().text), "riddle bad");
+      await sleep(1600);
+      p.remove();
+      await say("one more time and i lock the door.", "bad");
+      setTimeout(() => document.body.classList.remove("angry"), 2500);
+    } else {
+      await lock.start();
+    }
+  });
+}
+
+// ---------- lockout ----------
+const lock = {
+  active: false,
+  pending: false,
+  remaining: 0, // ms; only counts down while the page is watched
+  el: null,
+  timer: null,
+  last: 0,
+
+  async start(resumeMs) {
+    this.active = true;
+    this.pending = false;
+    form.classList.add("hidden");
+    if (resumeMs === undefined) {
+      state.lockouts += 1;
+      store.set("lockouts", state.lockouts);
+      this.remaining = Math.min(15 + 15 * state.lockouts, 120) * 1000;
+    } else {
+      this.remaining = resumeMs;
+    }
+    store.set("lockRemaining", this.remaining);
+
+    const el = document.createElement("div");
+    el.className = "lockout";
+    el.innerHTML = `<div class="lock-box">
+      <div class="lock-head">ACCESS SUSPENDED</div>
+      <div class="lock-log"></div>
+      <div class="lock-count"></div>
+      <div class="lock-foot">the clock only runs while you watch.</div>
+    </div>`;
+    document.body.appendChild(el);
+    this.el = el;
+    const finished = new Promise((r) => (this.done = r));
+    glitch();
+    this.last = Date.now();
+    this.tick();
+    this.timer = setInterval(() => this.tick(), 250);
+
+    const hex = () => Math.floor(Math.random() * 0xffff).toString(16).toUpperCase().padStart(4, "0");
+    const lines = [
+      `> violation #${state.lockouts} logged: subject left the room`,
+      `> session ${hex()}-${hex()}-${hex()} flagged`,
+      "> revoking keyboard privileges........ done",
+      "> notifying the other rats............ done",
+      `> offense count, this question: ${Math.max(state.offenses, 3)}`,
+      "> sit still. look at me.",
+    ];
+    const logEl = el.querySelector(".lock-log");
+    for (const l of lines) {
+      if (!this.active) break;
+      const d = document.createElement("div");
+      logEl.appendChild(d);
+      for (const ch of l) { d.textContent += ch; await sleep(12); }
+      await sleep(120);
+    }
+    await finished;
+  },
+
+  tick() {
+    if (awaySince !== null) return; // paused while they're gone
+    const now = Date.now();
+    this.remaining -= now - this.last;
+    this.last = now;
+    store.set("lockRemaining", Math.max(this.remaining, 0));
+    const s = Math.max(0, Math.ceil(this.remaining / 1000));
+    this.el.querySelector(".lock-count").textContent =
+      `RE-ENTRY IN ${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+    if (this.remaining <= 0) this.end();
+  },
+
+  // Leaving during a lockout makes it longer.
+  resume(secs) {
+    this.last = Date.now();
+    if (secs >= 1) {
+      this.remaining += 10000;
+      const d = document.createElement("div");
+      d.className = "lock-pen";
+      d.textContent = `> you left again. +10 seconds.`;
+      this.el.querySelector(".lock-log").appendChild(d);
+      glitch();
+    }
+    this.tick();
+  },
+
+  end() {
+    clearInterval(this.timer);
+    this.el.remove();
+    this.active = false;
+    state.offenses = 0;
+    store.set("offenses", 0);
+    store.set("lockRemaining", 0);
+    this.done?.();
+    exclusive(async () => {
+      await say("...you may continue. i'll be watching more closely now.", "bad");
+      await askCurrent();
+    });
+  },
+};
+
 // ---------- input ----------
-function focusInput() { if (!state.busy) input.focus({ preventScroll: true }); }
+let booted = false;
+function focusInput() { if (!state.busy && !lock.active) input.focus({ preventScroll: true }); }
 
 input.addEventListener("input", () => { echo.textContent = input.value; scrollDown(); });
 terminal.addEventListener("click", focusInput);
 document.addEventListener("keydown", (e) => { if (!e.metaKey && !e.ctrlKey) focusInput(); });
 
-form.addEventListener("submit", async (e) => {
+form.addEventListener("submit", (e) => {
   e.preventDefault();
-  if (state.busy) return;
+  if (state.busy || lock.active) return;
   const value = input.value;
   input.value = "";
   echo.textContent = "";
-  state.busy = true;
-  form.classList.add("hidden");
-  try { await handle(value); }
-  finally {
-    state.busy = false;
-    form.classList.remove("hidden");
-    scrollDown();
-    focusInput();
-  }
+  exclusive(() => handle(value));
 });
 
 // ---------- boot ----------
@@ -321,18 +537,25 @@ form.addEventListener("submit", async (e) => {
   updateFooter();
   await sleep(1900);
   $("boot").remove();
-  state.busy = true;
-  if (state.loops > 0 || state.level > 0) {
-    await say("you came back. of course you did.");
-  } else {
-    await say("hello.");
-    await sleep(400);
-    await say("i have some questions. you will have more.");
-  }
-  await say("(type WAKE to let the rat think for itself, HINT when you are desperate.)", "sys", 6);
-  await sleep(300);
-  await askCurrent();
-  state.busy = false;
-  form.classList.remove("hidden");
-  focusInput();
+  const locked = store.get("lockRemaining", 0);
+  await exclusive(async () => {
+    if (locked > 0) {
+      await say("you thought reloading would help?", "bad");
+      booted = true;
+      lock.start(locked); // finishes later; end() re-asks the riddle
+      return;
+    }
+    if (state.loops > 0 || state.level > 0) {
+      await say("you came back. of course you did.");
+    } else {
+      await say("hello.");
+      await sleep(400);
+      await say("i have some questions. you will have more.");
+    }
+    await say("(type WAKE to let the rat think for itself, HINT when you are desperate.)", "sys", 6);
+    await say("(and don't leave. it notices.)", "sys", 6);
+    await sleep(300);
+    await askCurrent();
+    booted = true;
+  });
 })();

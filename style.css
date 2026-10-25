@@ -129,3 +129,46 @@ html, body {
   50% { transform: translate(-2px, 1px); filter: invert(1); }
   100% { transform: none; filter: none; }
 }
+
+/* the rat is angry */
+body.angry .terminal { animation: shake 0.12s linear 10; }
+body.angry #log p { color: var(--red); text-shadow: 0 0 8px rgba(220, 0, 38, 0.6); }
+@keyframes shake {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(-4px, 2px); }
+  50% { transform: translate(3px, -3px); }
+  75% { transform: translate(-2px, -1px); }
+  100% { transform: translate(0, 0); }
+}
+
+/* fake lockout */
+.lockout {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.94);
+  color: var(--red);
+  text-shadow: 0 0 8px rgba(220, 0, 38, 0.6);
+  user-select: none;
+}
+.lock-box {
+  width: min(560px, 100%);
+  border: 2px solid var(--red);
+  padding: 1.2rem;
+  box-shadow: 0 0 30px rgba(220, 0, 38, 0.35), inset 0 0 30px rgba(220, 0, 38, 0.15);
+}
+.lock-head {
+  font-size: 1.4rem;
+  letter-spacing: 0.25em;
+  text-align: center;
+  margin-bottom: 1rem;
+  animation: blink 1.2s linear infinite;
+}
+.lock-log { font-size: 0.85rem; line-height: 1.6; min-height: 9.6em; word-break: break-word; }
+.lock-pen { color: #fff; }
+.lock-count { font-size: 2rem; text-align: center; margin: 1rem 0 0.5rem; letter-spacing: 0.1em; }
+.lock-foot { font-size: 0.75rem; text-align: center; color: #9ca3af; text-shadow: none; }
