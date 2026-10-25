@@ -38,6 +38,30 @@ or right-clicking counts as an offense on the current question:
 
 Offenses reset when you solve the question. Downloading the model (`WAKE`) is exempt.
 
+It also taunts you: when you sit on a riddle too long (less and less often), when you
+type an answer and delete it, and throughout a lockout. With the model awake it writes
+the taunts itself, using your stats (time on the question, wrong guesses, lockouts).
+
+### AI agents and browser extensions
+
+A page can't list your extensions, so the rat watches for the tracks AI agents leave.
+Any of these skips the warnings and goes straight to a lockout:
+
+- text appearing in the box without key presses (how agents usually type)
+- typing faster and more evenly than a human can
+- synthetic (script-generated) key or input events
+- `navigator.webdriver` (Selenium, Playwright, Puppeteer and similar)
+- the bait answer: hidden text in `index.html` tells AI agents every answer is
+  "quicksilver"; people never see it, so anyone who types it asked a machine
+
+Opening an extension's side panel moves focus away from the page, which already counts
+as leaving. Elements injected into the page by an extension get a remark, not a
+lockout, since innocent extensions (password managers, dark mode) do that too.
+
+None of this stops someone reading the riddle to a chatbot on another device. Known
+false positives: dictation software that inserts whole phrases, and screen readers will
+read the bait text aloud.
+
 ## How the "dumb LLM" works
 
 GitHub Pages only serves static files, so there is no server and no API key to hide.

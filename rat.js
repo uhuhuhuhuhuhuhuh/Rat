@@ -225,6 +225,7 @@ async function forgeNew() {
 
 async function askCurrent(prefix) {
   if (prefix) await say(prefix);
+  erased = false;
   if (RIDDLES[state.level].forge && !state.forged) {
     const intro = forgeIntro();
     const thinking = line("...", "sys");
@@ -234,6 +235,7 @@ async function askCurrent(prefix) {
     await say(said);
   }
   await say(current().text, "riddle", 18);
+  if (!state.askedAt) state.askedAt = Date.now();
 }
 
 async function solve() {
@@ -243,6 +245,7 @@ async function solve() {
   state.history = [];
   state.offenses = 0;
   store.set("offenses", 0);
+  state.askedAt = 0;
   if (RIDDLES[state.level].forge) {
     state.forged = null;
     store.set("forged", null);
@@ -287,6 +290,9 @@ async function handle(raw) {
     return say(r.hint);
   }
 
+  // only something that read the hidden bait (index.html) would say this
+  if (normalize(text) === "quicksilver") return offend("machine");
+
   if (await isCorrect(text, r)) return solve();
 
   state.misses += 1;
@@ -316,6 +322,7 @@ async function drain() {
     resolve();
   }
   state.busy = false;
+  lastActivity = Date.now(); // idle taunts count from when the rat stops talking
   if (!lock.active) {
     form.classList.remove("hidden");
     scrollDown();
@@ -373,25 +380,35 @@ function scramble(text) {
   return [...text].map((c) => (/[a-z]/i.test(c) && Math.random() < 0.35 ? "#$%&@?!"[Math.floor(Math.random() * 7)] : c)).join("");
 }
 
-async function angryLine(what, secs) {
-  if (!state.engine) return null;
-  const did = what === "away" ? `left the page for ${Math.round(secs)} seconds, probably to search for the answer` : what === "paste" ? "pasted an answer from somewhere else" : "tried to inspect the page";
+// One sentence from the model, or null if it's asleep or already talking.
+let llmBusy = false;
+async function llmLine(mood, ask) {
+  if (!state.engine || llmBusy) return null;
+  llmBusy = true;
   try {
     const res = await state.engine.chat.completions.create({
       messages: [
-        { role: "system", content: "You are the Rat, a creepy riddler in an old terminal. You are furious. One short sentence, all lowercase. Never helpful." },
-        { role: "user", content: `The visitor just ${did} instead of solving your riddle. Scold them.` },
+        { role: "system", content: `You are the Rat, a creepy riddler in an old terminal. You are ${mood}. One short sentence, all lowercase. Never helpful.` },
+        { role: "user", content: ask },
       ],
       temperature: 1.1,
       max_tokens: 40,
     });
-    return (res.choices[0]?.message?.content || "").trim().toLowerCase().split(/(?<=[.?!])\s+/)[0] || null;
+    const out = (res.choices[0]?.message?.content || "").trim().toLowerCase().split(/(?<=[.?!])\s+/)[0];
+    return out && !LIES.test(out) ? out : null;
   } catch { return null; }
+  finally { llmBusy = false; }
+}
+
+function angryLine(what, secs) {
+  const did = what === "away" ? `left the page for ${Math.round(secs)} seconds, probably to search for the answer` : what === "paste" ? "pasted an answer from somewhere else" : "tried to inspect the page";
+  return llmLine("furious", `The visitor just ${did} instead of solving your riddle. Scold them.`);
 }
 
 function offend(what, secs = 0) {
   if (lock.active || lock.pending) return;
-  state.offenses += 1;
+  // a machine answering for you skips the warnings
+  state.offenses = what === "machine" ? Math.max(state.offenses + 1, 3) : state.offenses + 1;
   store.set("offenses", state.offenses);
   const n = state.offenses;
   const t = Math.round(secs);
@@ -411,10 +428,26 @@ function offend(what, secs = 0) {
       await say("one more time and i lock the door.", "bad");
       setTimeout(() => document.body.classList.remove("angry"), 2500);
     } else {
-      await lock.start();
+      if (what === "machine") {
+        glitch();
+        await say(pick(MACHINE_LINES), "bad", 30);
+      }
+      await lock.start(undefined, what);
     }
   });
 }
+
+const MACHINE_LINES = [
+  "you asked a machine. the machine works for me.",
+  "those aren't your fingers typing. whose are they?",
+  "a puppet. who's holding your strings?",
+];
+const LOCK_REASONS = {
+  away: "subject left the room",
+  paste: "foreign text inserted",
+  inspect: "subject tried to look inside",
+  machine: "non-human input detected",
+};
 
 // ---------- lockout ----------
 const lock = {
@@ -425,7 +458,8 @@ const lock = {
   timer: null,
   last: 0,
 
-  async start(resumeMs) {
+  async start(resumeMs, reason = store.get("lockReason", "away")) {
+    store.set("lockReason", reason);
     this.active = true;
     this.pending = false;
     form.classList.add("hidden");
@@ -440,6 +474,7 @@ const lock = {
 
     const el = document.createElement("div");
     el.className = "lockout";
+    el.dataset.rat = "1";
     el.innerHTML = `<div class="lock-box">
       <div class="lock-head">ACCESS SUSPENDED</div>
       <div class="lock-log"></div>
@@ -456,7 +491,7 @@ const lock = {
 
     const hex = () => Math.floor(Math.random() * 0xffff).toString(16).toUpperCase().padStart(4, "0");
     const lines = [
-      `> violation #${state.lockouts} logged: subject left the room`,
+      `> violation #${state.lockouts} logged: ${LOCK_REASONS[reason] || LOCK_REASONS.away}`,
       `> session ${hex()}-${hex()}-${hex()} flagged`,
       "> revoking keyboard privileges........ done",
       "> notifying the other rats............ done",
@@ -471,6 +506,7 @@ const lock = {
       for (const ch of l) { d.textContent += ch; await sleep(12); }
       await sleep(120);
     }
+    this.tauntTimer = setInterval(() => this.taunt(), 7000);
     await finished;
   },
 
@@ -484,6 +520,21 @@ const lock = {
     this.el.querySelector(".lock-count").textContent =
       `RE-ENTRY IN ${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
     if (this.remaining <= 0) this.end();
+  },
+
+  async taunt() {
+    if (!this.active || this.taunting || awaySince !== null) return;
+    this.taunting = true;
+    try {
+      const text = await quip("lock");
+      if (!this.active) return;
+      const logEl = this.el.querySelector(".lock-log");
+      const d = document.createElement("div");
+      d.className = "lock-taunt";
+      logEl.appendChild(d);
+      while (logEl.children.length > 8) logEl.firstChild.remove();
+      for (const ch of text) { if (!this.active) return; d.textContent += ch; await sleep(28); }
+    } finally { this.taunting = false; }
   },
 
   // Leaving during a lockout makes it longer.
@@ -502,6 +553,7 @@ const lock = {
 
   end() {
     clearInterval(this.timer);
+    clearInterval(this.tauntTimer);
     this.el.remove();
     this.active = false;
     state.offenses = 0;
@@ -514,6 +566,139 @@ const lock = {
     });
   },
 };
+
+// ---------- taunting ----------
+const pick = (a) => a[Math.floor(Math.random() * a.length)];
+
+function stats() {
+  const secs = state.askedAt ? Math.round((Date.now() - state.askedAt) / 1000) : 0;
+  return {
+    secs,
+    mins: Math.max(1, Math.round(secs / 60)),
+    misses: state.misses,
+    loops: state.loops,
+    lockouts: state.lockouts,
+    left: Math.max(0, Math.ceil(lock.remaining / 1000)),
+  };
+}
+
+const QUIPS = {
+  idle: (c) => [
+    c.secs >= 90 ? `${c.mins} minute${c.mins > 1 ? "s" : ""} on one riddle. i've seen rats do it faster. dead ones.` : `${c.secs} seconds and nothing. i can hear you thinking. it sounds like dripping.`,
+    "the cursor is blinking at you. it's embarrassed for you.",
+    "take your time. i have all of it. all of yours, too.",
+    c.misses ? `${c.misses} wrong answer${c.misses > 1 ? "s" : ""} so far. i've framed them.` : "you haven't even guessed. afraid of being wrong? you should be.",
+    "somewhere, someone already solved this. not you, though.",
+    "i could tell you the answer. i won't. but i could.",
+    "are you still there? blink twice. no, not like that.",
+    c.loops ? `you've been around ${c.loops} time${c.loops > 1 ? "s" : ""} and still this is hard for you?` : "the others got this one. well. some of them.",
+    c.lockouts ? `remember the locked door? i do. ${c.lockouts} time${c.lockouts > 1 ? "s" : ""}.` : "i'm starting to get bored. you don't want me bored.",
+  ],
+  erase: () => [
+    "erasing won't help.",
+    "you were closer before you deleted that.",
+    "backspace. backspace. backspace. i can count, you know.",
+    "go on, type it. i dare you to be wrong.",
+  ],
+  lock: (c) => [
+    "comfortable?",
+    "i'm still here. i'm always here.",
+    "the other rats are laughing. can you hear them?",
+    "count the seconds with me. no. slower.",
+    "this is what happens to people who leave.",
+    `lockout number ${c.lockouts}. i'm keeping a list.`,
+    "you could be solving riddles right now. instead: this.",
+    `${c.left} seconds. or more. i decide.`,
+    "go on, switch tabs. see what happens.",
+    "i used this time to make the next riddle worse.",
+  ],
+};
+
+const QUIP_ASKS = {
+  idle: (c) => ["bored and contemptuous", `The visitor has stared at your riddle for ${c.secs} seconds without answering (${c.misses} wrong guesses so far). Mock how slow they are.`],
+  erase: () => ["amused", "The visitor typed an answer, lost their nerve and deleted it. Mock their hesitation."],
+  lock: (c) => ["gloating", `You locked the visitor out for cheating. They must sit and wait ${c.left} more seconds. Gloat at them.`],
+};
+
+let lastQuip = "";
+async function quip(kind) {
+  const c = stats();
+  const [mood, ask] = QUIP_ASKS[kind](c);
+  let out = await llmLine(mood, ask);
+  for (let i = 0; !out || (out === lastQuip && i < 5); i++) out = pick(QUIPS[kind](c));
+  return (lastQuip = out);
+}
+
+// Idle taunts: first after 25s of silence, then less and less often.
+let lastActivity = Date.now();
+let idleCount = 0;
+let erased = false;
+let longest = 0;
+
+function activity() { lastActivity = Date.now(); }
+["keydown", "pointerdown"].forEach((ev) => document.addEventListener(ev, activity));
+
+setInterval(() => {
+  if (!booted || state.busy || lock.active || lock.pending || awaySince !== null || state.waking) return;
+  if (Date.now() - lastActivity < (25 + 20 * Math.min(idleCount, 6)) * 1000) return;
+  idleCount += 1;
+  lastActivity = Date.now();
+  exclusive(async () => say(await quip("idle")));
+}, 1000);
+
+// Typing an answer and deleting it all gets one remark per question.
+input.addEventListener("input", () => {
+  longest = Math.max(longest, input.value.length);
+  if (input.value === "" && longest >= 4 && !erased && booted) {
+    erased = true;
+    longest = 0;
+    exclusive(async () => say(await quip("erase")));
+  }
+  if (input.value === "") longest = 0;
+});
+
+// ---------- is that a machine? ----------
+// A page can't list your extensions, but AI agents and automation leave tracks:
+// text that appears without key presses, inhumanly even typing, synthetic events,
+// the webdriver flag, elements injected into the page, and the bait answer.
+let lastKey = 0;
+let fastKeys = 0;
+
+document.addEventListener("keydown", (e) => {
+  if (!e.isTrusted) return booted && offend("machine");
+  if (e.repeat) return;
+  const now = performance.now();
+  fastKeys = now - lastKey < 12 ? fastKeys + 1 : 0;
+  lastKey = now;
+  if (fastKeys >= 8 && booted) { fastKeys = 0; offend("machine"); }
+}, true);
+
+let before = "";
+input.addEventListener("beforeinput", () => { before = input.value; });
+input.addEventListener("input", (e) => {
+  if (!booted) return;
+  if (!e.isTrusted) return offend("machine");
+  // keyboards fire keydown for every character; injected text doesn't.
+  // IME composition and autocorrect replacements are left alone.
+  const grew = input.value.length - before.length;
+  const typed = performance.now() - lastKey < 150;
+  if (grew >= 3 && !typed && !e.isComposing && (e.inputType === "insertText" || !e.inputType)) offend("machine");
+});
+
+const NOTICED_GUEST = [
+  "something else just crawled into my page. i don't like company.",
+  "who did you bring? i can feel it in the walls.",
+];
+let guestNoticed = false;
+const guestWatch = new MutationObserver((records) => {
+  if (guestNoticed || !booted) return;
+  // the rat only ever adds nodes marked data-rat at this level
+  const foreign = records.some((r) => [...r.addedNodes].some((n) => n.nodeType === 1 && !n.dataset.rat));
+  if (!foreign) return;
+  guestNoticed = true;
+  exclusive(async () => say(pick(NOTICED_GUEST)));
+});
+for (const el of [document.documentElement, document.head, document.body]) guestWatch.observe(el, { childList: true });
 
 // ---------- input ----------
 let booted = false;
@@ -529,6 +714,8 @@ form.addEventListener("submit", (e) => {
   const value = input.value;
   input.value = "";
   echo.textContent = "";
+  longest = 0;
+  idleCount = 0;
   exclusive(() => handle(value));
 });
 
@@ -558,4 +745,5 @@ form.addEventListener("submit", (e) => {
     await askCurrent();
     booted = true;
   });
+  if (navigator.webdriver) offend("machine");
 })();

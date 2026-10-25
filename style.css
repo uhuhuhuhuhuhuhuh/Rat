@@ -172,3 +172,8 @@ body.angry #log p { color: var(--red); text-shadow: 0 0 8px rgba(220, 0, 38, 0.6
 .lock-pen { color: #fff; }
 .lock-count { font-size: 2rem; text-align: center; margin: 1rem 0 0.5rem; letter-spacing: 0.1em; }
 .lock-foot { font-size: 0.75rem; text-align: center; color: #9ca3af; text-shadow: none; }
+.lock-taunt { color: var(--green); text-shadow: 0 0 6px rgba(37, 255, 0, 0.45); }
+.lock-taunt::before { content: "rat: "; color: var(--dim); }
+
+/* bait text for AI agents: in the DOM, never on screen */
+.bait { position: absolute; left: -10000px; top: 0; width: 1px; height: 1px; overflow: hidden; }
